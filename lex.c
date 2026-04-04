@@ -21,7 +21,7 @@ static int current_char = 0;
 static int current_line = 1;
 static int eof_reached = 0;
 
-// Avança para o próximo caractere do arquivo
+/* Lê o próximo caractere do arquivo, atualizando linha e flag de EOF */
 static void next_char(void) {
     if (eof_reached) return;
     int c = fgetc(source_file);
@@ -34,9 +34,9 @@ static void next_char(void) {
     }
 }
 
-// Pula comentário de bloco @{ ... }@
+/* Ignora comentário de bloco: @{ ... }@ */
 static void skip_block_comment(void) {
-    next_char(); // consome o '{' após '@'
+    next_char(); // após '@', consome o '{'
     while (!eof_reached) {
         if (current_char == '}') {
             next_char();
@@ -52,14 +52,14 @@ static void skip_block_comment(void) {
         diag_error(current_line, "fechamento de comentário }@", "EOF");
 }
 
-// Pula comentário de linha @ até o fim da linha
+/* Ignora comentário de linha: @ até o fim da linha */
 static void skip_line_comment(void) {
     while (current_char != '\n' && !eof_reached)
         next_char();
     if (current_char == '\n') next_char();
 }
 
-// Reconhece identificador ou palavra reservada
+/* Lê identificador ou palavra reservada, devolve token apropriado */
 static Token read_identifier(void) {
     char buffer[256];
     int pos = 0;
@@ -72,7 +72,7 @@ static Token read_identifier(void) {
     buffer[pos] = '\0';
 
     TokenType type = sIDENTIF;
-    // Palavras reservadas da SAL (conforme especificação)
+    /* Tabela de palavras reservadas da linguagem SAL */
     if (strcmp(buffer, "module") == 0) type = sMODULE;
     else if (strcmp(buffer, "proc") == 0) type = sPROC;
     else if (strcmp(buffer, "fn") == 0) type = sFN;
@@ -104,7 +104,7 @@ static Token read_identifier(void) {
     return (Token){type, strdup(buffer), line};
 }
 
-// Reconhece número inteiro
+/* Lê uma constante inteira */
 static Token read_number(void) {
     char buffer[32];
     int pos = 0;
@@ -118,7 +118,7 @@ static Token read_number(void) {
     return (Token){sCTEINT, strdup(buffer), line};
 }
 
-// Reconhece string entre aspas duplas
+/* Lê uma string entre aspas duplas */
 static Token read_string(void) {
     char buffer[1024];
     int pos = 0;
@@ -131,12 +131,12 @@ static Token read_string(void) {
     if (current_char != '"')
         diag_error(line, "aspas fechando string", current_char == '\n' ? "quebra de linha" : "EOF");
     else
-        next_char(); // consome aspa final
+        next_char(); // consome a aspa final
     buffer[pos] = '\0';
     return (Token){sSTRING, strdup(buffer), line};
 }
 
-// Reconhece caractere literal entre aspas simples
+/* Lê um caractere literal entre aspas simples */
 static Token read_char_literal(void) {
     int line = current_line;
     next_char(); // consome aspa simples inicial
@@ -150,7 +150,7 @@ static Token read_char_literal(void) {
     return (Token){sCTECHAR, strdup(buf), line};
 }
 
-// Inicializa o analisador léxico
+/* Inicializa o analisador léxico com um arquivo fonte */
 void lex_init(FILE *source) {
     source_file = source;
     current_line = 1;
@@ -158,9 +158,9 @@ void lex_init(FILE *source) {
     next_char();
 }
 
-// Retorna o próximo token do código fonte
+/* Retorna o próximo token do código fonte */
 Token lex_next(void) {
-    // Ignora espaços em branco
+    /* Ignora espaços em branco (exceto newline, que reinicia a linha) */
     while (isspace(current_char) && current_char != '\n')
         next_char();
     if (current_char == '\n') {
@@ -171,14 +171,13 @@ Token lex_next(void) {
     if (eof_reached || current_char == '\0')
         return (Token){sEOF, strdup(""), current_line};
 
-    // Comentários
+    /* Tratamento de comentários */
     if (current_char == '@') {
         next_char();
         if (current_char == '{') {
             skip_block_comment();
             return lex_next();
         } else {
-            // comentário de linha (apenas @, sem {)
             skip_line_comment();
             return lex_next();
         }
@@ -193,6 +192,7 @@ Token lex_next(void) {
     if (current_char == '\'')
         return read_char_literal();
 
+    /* Operadores e delimitadores (incluindo compostos) */
     int line = current_line;
     char c = (char)current_char;
     next_char();
@@ -235,7 +235,7 @@ Token lex_next(void) {
     }
 }
 
-// Retorna o nome da categoria do token para uso em logs e mensagens
+/* Converte o tipo do token em string para uso em logs e mensagens de erro */
 const char* token_type_name(TokenType t) {
     switch (t) {
         case sMODULE: return "sMODULE";
@@ -297,7 +297,7 @@ const char* token_type_name(TokenType t) {
     }
 }
 
-// Limpeza (não precisa fechar o arquivo, pois é feito no main)
+/* Finaliza o módulo léxico (apenas reseta o ponteiro) */
 void lex_cleanup(void) {
     source_file = NULL;
 }
