@@ -14,20 +14,18 @@ Igor Silva Araujo - 10428505
 #include <stdlib.h>
 #include <string.h>
 
-// ----------------------------------------------------------------------
-// Variáveis estáticas do parser
-static Token current;
-static const char *src_base;
-static int tokens_flag = 0;
-static int trace_flag = 0;
-static int inside_function = 0;
+/* Variáveis estáticas do parser */
+static Token current;               // token atual
+static const char *src_base;        // nome base do arquivo (para logs)
+static int tokens_flag = 0;         // flag --tokens
+static int trace_flag = 0;          // flag --trace
+static int inside_function = 0;     // indica se está dentro de uma função (para retorno)
 
-// Offsets para geração de código
+/* Offsets para geração de código (posição das variáveis na pilha) */
 static int global_offset = 0;
 static int local_offset = 0;
 
-// ----------------------------------------------------------------------
-// Protótipos internos
+/* Protótipos das funções internas */
 static void advance(void);
 static void match(TokenType expected);
 static DataType parse_type(void);
@@ -54,11 +52,10 @@ static DataType parse_simple_expr(void);
 static DataType parse_term(void);
 static DataType parse_factor(void);
 
-// Declaração da função de rótulo (definida em codegen.c)
+/* Função de rótulo (definida em codegen.c) */
 char* new_label(void);
 
-// ----------------------------------------------------------------------
-// Avança para o próximo token, registrando se necessário
+/* Avança para o próximo token, registrando se necessário (para --tokens) */
 static void advance(void) {
     if (tokens_flag && current.type != sEOF && current.type != sERROR) {
         log_write_token(current);
@@ -67,11 +64,13 @@ static void advance(void) {
     current = lex_next();
 }
 
+/* Verifica se o token atual é o esperado; se não, reporta erro e tenta recuperar */
 static void match(TokenType expected) {
     if (current.type == expected) {
         advance();
     } else {
         diag_error(current.line, token_type_name(expected), token_type_name(current.type));
+        /* Recuperação: avança até encontrar ponto e vírgula, end, start ou else */
         while (current.type != sPONTOVIRG && current.type != sEND &&
                current.type != sEOF && current.type != sSTART && current.type != sELSE)
             advance();
@@ -80,8 +79,7 @@ static void match(TokenType expected) {
     }
 }
 
-// ----------------------------------------------------------------------
-// Tipos (apenas base)
+/* Lê um tipo básico (int, bool, char) e retorna sua representação interna */
 static DataType parse_type(void) {
     diag_info("Entrando em parse_type");
     DataType t;
@@ -96,8 +94,7 @@ static DataType parse_type(void) {
     return t;
 }
 
-// ----------------------------------------------------------------------
-// Declarações de variáveis (globais ou locais) – com suporte a vetores
+/* Declaração de variáveis (globais ou locais). Suporta vetores e lista de identificadores */
 static void parse_declarations(int is_global, int *offset_counter) {
     diag_info("Entrando em parse_declarations");
     do {
@@ -106,14 +103,14 @@ static void parse_declarations(int is_global, int *offset_counter) {
         int is_vector = 0;
         int vec_size = 0;
 
-        // Lê o primeiro identificador
+        /* Primeiro identificador */
         ids[id_count++] = strdup(current.lexeme);
         match(sIDENTIF);
 
-        // Verifica se é vetor (já após o identificador)
+        /* Verifica se é vetor: [ tamanho ] */
         if (current.type == sABRECOL) {
             is_vector = 1;
-            advance();  // consome '['
+            advance();
             if (current.type == sCTEINT) {
                 vec_size = atoi(current.lexeme);
                 advance();
@@ -123,22 +120,17 @@ static void parse_declarations(int is_global, int *offset_counter) {
             match(sFECHACOL);
         }
 
-        // Pode haver mais identificadores separados por vírgula
+        /* Possíveis outros identificadores separados por vírgula */
         while (current.type == sVIRG) {
             advance();
             if (current.type == sIDENTIF) {
                 ids[id_count++] = strdup(current.lexeme);
                 advance();
-                // Se este também for vetor, repete a lógica (mas a especificação pode não permitir)
+                /* Se for vetor, assume mesmo tamanho para todos */
                 if (current.type == sABRECOL) {
-                    // Para simplificar, assume que todos têm o mesmo tamanho
                     advance();
-                    if (current.type == sCTEINT) {
-                        // ignora, usa o mesmo vec_size
-                        advance();
-                    } else {
-                        diag_error(current.line, "constante inteira", token_type_name(current.type));
-                    }
+                    if (current.type == sCTEINT) advance();
+                    else diag_error(current.line, "constante inteira", token_type_name(current.type));
                     match(sFECHACOL);
                 }
             } else {
@@ -146,18 +138,17 @@ static void parse_declarations(int is_global, int *offset_counter) {
             }
         }
 
-        // Agora espera os dois pontos e o tipo
+        /* Dois pontos e tipo */
         match(sDOISPONTOS);
         DataType base_type = parse_type();
         match(sPONTOVIRG);
 
-        // Insere na tabela de símbolos
+        /* Insere cada identificador na tabela de símbolos e atualiza offset */
         for (int i = 0; i < id_count; i++) {
             if (is_vector) {
                 symtab_insert(ids[i], CAT_VECTOR, base_type, vec_size);
                 symtab_set_offset(ids[i], *offset_counter);
-                // Reserva vec_size + 1 células (índice 0 = tamanho)
-                *offset_counter += vec_size + 1;
+                *offset_counter += vec_size + 1;   // célula extra para tamanho
             } else {
                 symtab_insert(ids[i], CAT_VAR, base_type, 0);
                 symtab_set_offset(ids[i], *offset_counter);
@@ -169,8 +160,7 @@ static void parse_declarations(int is_global, int *offset_counter) {
     diag_info("Saindo de parse_declarations");
 }
 
-// ----------------------------------------------------------------------
-// Parâmetros (não podem ser vetores na especificação atual)
+/* Parâmetros de sub-rotina (apenas variáveis simples) */
 static void parse_params(int *param_count) {
     diag_info("Entrando em parse_params");
     do {
@@ -178,9 +168,8 @@ static void parse_params(int *param_count) {
         match(sIDENTIF);
         match(sDOISPONTOS);
         DataType t = parse_type();
-        // Parâmetros são tratados como variáveis simples
         symtab_insert(pname, PARAM, t, 0);
-        symtab_set_offset(pname, 4 + (*param_count) * 4);
+        symtab_set_offset(pname, 4 + (*param_count) * 4);  // offset a partir do frame pointer
         (*param_count)++;
         free(pname);
         if (current.type == sVIRG) advance();
@@ -189,25 +178,23 @@ static void parse_params(int *param_count) {
     diag_info("Saindo de parse_params");
 }
 
-// ----------------------------------------------------------------------
-// Seção globals
+/* Seção globals */
 static void parse_globals(void) {
     diag_info("Entrando em parse_globals");
     match(sGLOBALS);
     parse_declarations(1, &global_offset);
-    // Inicializa vetores globais (coloca o tamanho na célula base)
+    /* Inicializa vetores globais: armazena o tamanho na célula base */
     Scope *sc = symtab_get_current_scope();
     for (Symbol *s = sc->symbols; s; s = s->next) {
         if (s->category == CAT_VECTOR) {
-            emit_crct(s->extra);   // tamanho
-            emit_armz(s->offset);  // armazena na posição base
+            emit_crct(s->extra);
+            emit_armz(s->offset);
         }
     }
     diag_info("Saindo de parse_globals");
 }
 
-// ----------------------------------------------------------------------
-// Sub-rotinas (procedimentos e funções)
+/* Procedimento */
 static void parse_proc(void) {
     diag_info("Entrando em parse_proc");
     match(sPROC);
@@ -218,25 +205,26 @@ static void parse_proc(void) {
     char label[256];
     sprintf(label, "_%s", proc_name);
     symtab_set_label(proc_name, label);
-    emit_label(label);
+    emit_label(label);                       // rótulo para chamada
+
     char desc[256];
     sprintf(desc, "proc:%s.locals", proc_name);
     symtab_enter_scope(desc);
     local_offset = 0;
     int param_count = 0;
     match(sABREPAR);
-    if (current.type != sFECHAPAR) {
-        parse_params(&param_count);
-    }
+    if (current.type != sFECHAPAR) parse_params(&param_count);
     match(sFECHAPAR);
     symtab_update_extra(proc_name, param_count);
+
     if (current.type == sLOCALS) {
         advance();
         parse_declarations(0, &local_offset);
     }
     symtab_set_total_locals(local_offset);
-    emit_amem(local_offset);
-    // Inicializa vetores locais (coloca o tamanho na célula base)
+    emit_amem(local_offset);                 // aloca espaço para variáveis locais
+
+    /* Inicializa vetores locais com seus tamanhos */
     Scope *sc = symtab_get_current_scope();
     for (Symbol *s = sc->symbols; s; s = s->next) {
         if (s->category == CAT_VECTOR) {
@@ -245,13 +233,14 @@ static void parse_proc(void) {
         }
     }
     inside_function = 0;
-    parse_block();
+    parse_block();                           // corpo do procedimento
     emit_dmem(local_offset);
     emit_retorno();
     symtab_exit_scope();
     diag_info("Saindo de parse_proc");
 }
 
+/* Função (semelhante a procedimento, mas com tipo de retorno) */
 static void parse_fn(void) {
     diag_info("Entrando em parse_fn");
     match(sFN);
@@ -263,27 +252,26 @@ static void parse_fn(void) {
     sprintf(label, "_%s", fn_name);
     symtab_set_label(fn_name, label);
     emit_label(label);
+
     char desc[256];
     sprintf(desc, "fn:%s.locals", fn_name);
     symtab_enter_scope(desc);
     local_offset = 0;
     int param_count = 0;
     match(sABREPAR);
-    if (current.type != sFECHAPAR) {
-        parse_params(&param_count);
-    }
+    if (current.type != sFECHAPAR) parse_params(&param_count);
     match(sFECHAPAR);
     symtab_update_extra(fn_name, param_count);
     match(sDOISPONTOS);
-    DataType ret_type = parse_type();
-    (void)ret_type;
+    DataType ret_type = parse_type(); (void)ret_type;
+
     if (current.type == sLOCALS) {
         advance();
         parse_declarations(0, &local_offset);
     }
     symtab_set_total_locals(local_offset);
     emit_amem(local_offset);
-    // Inicializa vetores locais
+
     Scope *sc = symtab_get_current_scope();
     for (Symbol *s = sc->symbols; s; s = s->next) {
         if (s->category == CAT_VECTOR) {
@@ -299,19 +287,17 @@ static void parse_fn(void) {
     diag_info("Saindo de parse_fn");
 }
 
+/* Lista de sub-rotinas (procedimentos e funções) */
 static void parse_subs(void) {
     diag_info("Entrando em parse_subs");
     while (current.type == sPROC || current.type == sFN) {
-        if (current.type == sPROC)
-            parse_proc();
-        else
-            parse_fn();
+        if (current.type == sPROC) parse_proc();
+        else parse_fn();
     }
     diag_info("Saindo de parse_subs");
 }
 
-// ----------------------------------------------------------------------
-// Comandos
+/* Comando print: suporta strings e expressões numéricas */
 static void parse_print(void) {
     diag_info("Entrando em parse_print");
     match(sPRINT);
@@ -321,12 +307,12 @@ static void parse_print(void) {
             char *str = current.lexeme;
             for (int i = 0; str[i] != '\0'; i++) {
                 emit_crct(str[i]);
-                emit_chpr();          // imprime caractere
+                emit_chpr();           // imprime caractere
             }
             advance();
         } else {
             parse_expr();
-            emit_chpd();              // imprime número decimal
+            emit_chpd();               // imprime número decimal
         }
         if (current.type == sVIRG) advance();
         else break;
@@ -336,6 +322,7 @@ static void parse_print(void) {
     diag_info("Saindo de parse_print");
 }
 
+/* Comando scan: lê valor do teclado e armazena em variável ou posição de vetor */
 static void parse_scan(void) {
     diag_info("Entrando em parse_scan");
     match(sSCAN);
@@ -348,29 +335,14 @@ static void parse_scan(void) {
             diag_error(current.line, "variável declarada", var);
         }
         if (current.type == sABRECOL) {
-            // scan(vetor[indice])
+            /* Leitura para elemento de vetor: v[índice] */
             advance();
-            parse_expr();        // índice
+            parse_expr();               // índice
             match(sFECHACOL);
-            emit_chle();         // lê valor
-            emit_crct(offset);   // base do vetor
-            // Pilha: [valor_lido, base, índice]? Precisamos trocar.
-            // Ordem correta: empilha base, soma com índice, armazena.
-            // Vamos recalcular: depois de ler, temos [valor]. Empilhamos base, depois índice? Não.
-            // Melhor: calcular endereço antes de ler.
-            // Reorganizar: primeiro calcular endereço (base + índice), depois ler e armazenar.
-            // Para simplificar, vamos usar a mesma lógica da atribuição:
-            // 1. Calcular índice (já na pilha)
-            // 2. Emitir código para ler valor e armazenar no endereço calculado
-            // Mas o scan lê e já tem o valor. Então:
-            // - Guarda índice (duplica? Complexo). Vamos fazer:
-            //   índice -> empilha base -> soma -> endereço (no topo)
-            //   então lê e armazena indiretamente.
-            // Precisamos de CRVI/ARMI. Vamos usar ARMI.
             emit_crct(offset);
-            emit_soma();         // endereço no topo
-            emit_chle();         // lê valor, empilha
-            emit_armi();         // armazena no endereço
+            emit_soma();                // endereço = base + índice
+            emit_chle();                // lê valor e empilha
+            emit_armi();                // armazena no endereço calculado
         } else {
             emit_chle();
             emit_armz(offset);
@@ -384,6 +356,7 @@ static void parse_scan(void) {
     diag_info("Saindo de parse_scan");
 }
 
+/* Comando if com else opcional */
 static void parse_if(void) {
     diag_info("Entrando em parse_if");
     match(sIF);
@@ -391,13 +364,13 @@ static void parse_if(void) {
     parse_expr();
     char *label_false = new_label();
     char *label_end = new_label();
-    emit_dsvf(label_false);
-    parse_command();
-    emit_dsvs(label_end);
+    emit_dsvf(label_false);        // desvia se condição falsa
+    parse_command();               // bloco then
+    emit_dsvs(label_end);          // pula o else
     emit_label(label_false);
     if (current.type == sELSE) {
         advance();
-        parse_command();
+        parse_command();           // bloco else
     }
     emit_label(label_end);
     free(label_false);
@@ -405,6 +378,7 @@ static void parse_if(void) {
     diag_info("Saindo de parse_if");
 }
 
+/* Aloca um espaço temporário na pilha (para match, por exemplo) */
 static int allocate_temp(void) {
     int temp = local_offset;
     local_offset++;
@@ -412,153 +386,100 @@ static int allocate_temp(void) {
     return temp;
 }
 
+/* Comando match (seleção múltipla) com suporte a valores únicos e intervalos */
 static void parse_match(void) {
     diag_info("Entrando em parse_match");
     match(sMATCH);
     match(sABREPAR);
-    
-    // Aloca um temporário para guardar o valor da expressão
-    int temp = allocate_temp();
-    
-    // Avalia a expressão e armazena no temporário
+    int temp = allocate_temp();          // variável temporária para guardar a expressão
     parse_expr();
     emit_armz(temp);
-    
     match(sFECHAPAR);
-    
+
     char *label_end = new_label();
-    
-    // Processa cada cláusula when
+
     while (current.type == sWHEN) {
-        advance(); // consome 'when'
-        
-        char *label_next = new_label(); // rótulo para o próximo when (caso não entre neste)
-        
-        // Processa a lista de valores/intervalos
-        int first = 1;
-        do {
-            if (current.type == sCTEINT) {
-                int val = atoi(current.lexeme);
+        advance();
+        char *label_next = new_label();
+
+        /* Processa um valor ou intervalo (ignora listas completas por simplicidade) */
+        if (current.type == sCTEINT) {
+            int val = atoi(current.lexeme);
+            advance();
+            if (current.type == sPTOPTO) {
+                /* Intervalo val .. val2 */
                 advance();
-                
-                if (current.type == sPTOPTO) {
-                    // Intervalo: val .. val2
-                    advance();
-                    int val2 = atoi(current.lexeme);
-                    advance();
-                    
-                    // Gera código: (temp >= val) && (temp <= val2)
-                    emit_crvl(temp);
-                    emit_crct(val);
-                    emit_cmmeq();   // >=
-                    emit_crvl(temp);
-                    emit_crct(val2);
-                    emit_cmmaq();   // <=
-                    emit_conj();
-                } else {
-                    // Valor único
-                    emit_crvl(temp);
-                    emit_crct(val);
-                    emit_cmeq();
-                }
-                
-                // Se for o primeiro valor/intervalo da lista, faz DSVF para o próximo when
-                // Caso contrário, faz DSVF para o mesmo label_next (já que é OR implícito)
-                // Na verdade, a lista é um OR: se qualquer valor/intervalo corresponder, executa o comando.
-                // Portanto, após cada teste individual, se verdadeiro, deve desviar para executar o comando.
-                // Se falso, continua testando os próximos da lista.
-                // Ao final da lista, se nenhum correspondeu, desvia para label_next.
-                
-                if (first) {
-                    // Primeiro elemento da lista: se verdadeiro, vai executar o comando (sem desviar)
-                    // Precisamos inverter: se verdadeiro, desvia para executar o comando.
-                    // Ou podemos usar DSVF após cada teste, mas o DSVF desvia se falso.
-                    // Vamos usar uma lógica diferente: após cada teste, se verdadeiro, desvia para o comando.
-                    // Como não temos DSVT (desvia se verdadeiro), usamos DSVF com um label intermediário.
-                    // Vamos fazer: após o teste, se falso, continua; se verdadeiro, salta para o comando.
-                    // Para isso, invertemos o teste: usamos o complemento da condição.
-                    // Mas é mais simples: após cada teste, emitir DSVF para o próximo teste (se falso).
-                    // No final da lista, DSVF para label_next.
-                    // Porém, isso exige empilhar/desempilhar o resultado.
-                    // Vamos adotar a abordagem: armazenar o resultado da comparação, fazer OR entre eles.
-                    // Mas é complexo.
-                    // Abordagem prática: tratar lista como uma série de testes, cada um com seu próprio desvio.
-                }
-                // Para simplificar, vamos tratar apenas um valor/intervalo por when.
-                // A especificação permite lista, mas não é obrigatória para o projeto.
-                // Vamos ignorar a lista e considerar apenas o primeiro elemento.
-                // Se houver mais, emitimos um aviso e ignoramos.
-                if (current.type == sVIRG) {
-                    diag_info("Lista de valores no match: tratando apenas o primeiro");
-                    while (current.type == sVIRG) {
-                        advance();
-                        if (current.type == sCTEINT) advance();
-                        if (current.type == sPTOPTO) { advance(); advance(); }
-                    }
-                }
-                break; // sai do loop de processamento da lista (trata só o primeiro)
+                int val2 = atoi(current.lexeme);
+                advance();
+                emit_crvl(temp);
+                emit_crct(val);
+                emit_cmmeq();            // >= val
+                emit_crvl(temp);
+                emit_crct(val2);
+                emit_cmmaq();            // <= val2
+                emit_conj();             // combina as duas condições
             } else {
-                diag_error(current.line, "constante inteira", token_type_name(current.type));
-                advance();
+                /* Valor único */
+                emit_crvl(temp);
+                emit_crct(val);
+                emit_cmeq();
             }
-            if (current.type == sVIRG) advance();
-            else break;
-        } while (1);
-        
-        // Após os testes, se chegou aqui, o valor não correspondeu a nenhum da lista.
-        // Então desvia para o próximo when (ou para otherwise)
-        emit_dsvf(label_next);
-        
-        // --- Código do comando quando corresponde ---
+            /* Se houver vírgula (lista), avança ignorando (trata apenas o primeiro) */
+            while (current.type == sVIRG) {
+                advance();
+                if (current.type == sCTEINT) advance();
+                if (current.type == sPTOPTO) { advance(); advance(); }
+            }
+        } else {
+            diag_error(current.line, "constante inteira", token_type_name(current.type));
+            advance();
+        }
+
+        emit_dsvf(label_next);          // se não corresponde, vai para próximo when
         match(sIMPLIC);
         parse_command();
-        emit_dsvs(label_end); // sai do match após executar
-        
-        // Rótulo para pular este when (caso não tenha correspondido)
+        emit_dsvs(label_end);           // após executar, sai do match
         emit_label(label_next);
         free(label_next);
     }
-    
-    // Cláusula otherwise
+
     if (current.type == sOTHERWISE) {
         advance();
         match(sIMPLIC);
         parse_command();
     }
-    
     match(sEND);
     emit_label(label_end);
     free(label_end);
-    
     diag_info("Saindo de parse_match");
 }
 
+/* Comando for (incremento unitário, sem step) */
 static void parse_for(void) {
     diag_info("Entrando em parse_for");
     match(sFOR);
     char *ctrl = strdup(current.lexeme);
     match(sIDENTIF);
-    if (symtab_lookup(ctrl) == NULL) {
+    if (symtab_lookup(ctrl) == NULL)
         diag_error(current.line, "variável declarada", ctrl);
-    }
     int offset = symtab_get_offset(ctrl);
     match(sATRIB);
     parse_expr();
-    emit_armz(offset);
+    emit_armz(offset);                  // inicializa variável de controle
     match(sTO);
-    parse_expr();          // limite (empilha)
+    parse_expr();                       // limite
     char *label_start = new_label();
     char *label_exit = new_label();
     emit_label(label_start);
     emit_crvl(offset);
-    emit_cmma();           // controle > limite?
+    emit_cmma();                        // controle > limite ?
     emit_dsvf(label_exit);
     if (current.type == sDO) advance();
     parse_command();
     emit_crvl(offset);
     emit_crct(1);
     emit_soma();
-    emit_armz(offset);
+    emit_armz(offset);                  // incrementa
     emit_dsvs(label_start);
     emit_label(label_exit);
     free(ctrl);
@@ -567,6 +488,7 @@ static void parse_for(void) {
     diag_info("Saindo de parse_for");
 }
 
+/* Loop while: repita enquanto condição verdadeira */
 static void parse_loop_while(void) {
     diag_info("Entrando em parse_loop_while");
     match(sLOOP);
@@ -585,6 +507,7 @@ static void parse_loop_while(void) {
     diag_info("Saindo de parse_loop_while");
 }
 
+/* Loop until: repita até que condição se torne verdadeira */
 static void parse_loop_until(void) {
     diag_info("Entrando em parse_loop_until");
     match(sLOOP);
@@ -596,11 +519,12 @@ static void parse_loop_until(void) {
     parse_expr();
     match(sFECHAPAR);
     match(sPONTOVIRG);
-    emit_dsvf(label_start);
+    emit_dsvf(label_start);             // repete enquanto condição falsa
     free(label_start);
     diag_info("Saindo de parse_loop_until");
 }
 
+/* Comando return (retorna valor de função) */
 static void parse_ret(void) {
     diag_info("Entrando em parse_ret");
     match(sRET);
@@ -611,6 +535,7 @@ static void parse_ret(void) {
     diag_info("Saindo de parse_ret");
 }
 
+/* Bloco de comandos delimitado por start/end */
 static void parse_block(void) {
     diag_info("Entrando em parse_block");
     match(sSTART);
@@ -621,6 +546,7 @@ static void parse_block(void) {
     diag_info("Saindo de parse_block");
 }
 
+/* Comando genérico: despacha para a função adequada */
 static void parse_command(void) {
     diag_info("Entrando em parse_command");
     if (current.type == sSTART) {
@@ -651,17 +577,15 @@ static void parse_command(void) {
         char *id = strdup(current.lexeme);
         advance();
         if (current.type == sATRIB) {
+            /* Atribuição simples: id := expr */
             advance();
             parse_expr();
             match(sPONTOVIRG);
             int offset = symtab_get_offset(id);
-            if (offset == -1) {
-                diag_error(current.line, "variável declarada", id);
-            } else {
-                emit_armz(offset);
-            }
+            if (offset == -1) diag_error(current.line, "variável declarada", id);
+            else emit_armz(offset);
         } else if (current.type == sABREPAR) {
-            // Chamada de procedimento/função
+            /* Chamada de procedimento/função */
             advance();
             int arg_count = 0;
             while (current.type != sFECHAPAR && current.type != sEOF) {
@@ -676,28 +600,24 @@ static void parse_command(void) {
             if (label) {
                 emit_para(arg_count);
                 emit_cham(label);
-                if (symtab_lookup(id)->category == FUNC) {
-                    // valor de retorno na pilha (pode ser descartado)
-                }
             } else {
                 diag_error(current.line, "procedimento/função declarado", id);
             }
         } else if (current.type == sABRECOL) {
-            // Atribuição a vetor: v[expr] := expr
-            advance();   // consome '['
+            /* Atribuição a vetor: v[expr] := expr */
+            advance();
             parse_expr();               // índice
             match(sFECHACOL);
             match(sATRIB);
             parse_expr();               // valor RHS
-            // Pilha agora: [RHS, índice]
-            emit_troca();               // [índice, RHS]
+            emit_troca();               // troca RHS e índice
             int base_offset = symtab_get_offset(id);
             if (base_offset == -1) {
                 diag_error(current.line, "vetor declarado", id);
             } else {
                 emit_crct(base_offset);
-                emit_soma();            // [endereço, RHS]
-                emit_troca();           // [RHS, endereço]
+                emit_soma();            // endereço = base + índice
+                emit_troca();           // (RHS, endereço)
                 emit_armi();            // armazena RHS no endereço
             }
             match(sPONTOVIRG);
@@ -712,8 +632,7 @@ static void parse_command(void) {
     diag_info("Saindo de parse_command");
 }
 
-// ----------------------------------------------------------------------
-// Expressões com geração de código
+/* Fator de expressão: constante, variável, chamada de função, acesso a vetor, parênteses */
 static DataType parse_factor(void) {
     diag_info("Entrando em parse_factor");
     DataType type = TIPO_INT;
@@ -739,7 +658,7 @@ static DataType parse_factor(void) {
         char *id = strdup(current.lexeme);
         advance();
         if (current.type == sABREPAR) {
-            // Chamada de função
+            /* Chamada de função */
             advance();
             int arg_count = 0;
             while (current.type != sFECHAPAR && current.type != sEOF) {
@@ -758,8 +677,8 @@ static DataType parse_factor(void) {
                 diag_error(current.line, "função declarada", id);
             }
         } else if (current.type == sABRECOL) {
-            // Acesso a vetor: v[expr]
-            advance();   // consome '['
+            /* Acesso a vetor: v[expr] */
+            advance();
             parse_expr();               // índice
             match(sFECHACOL);
             int base_offset = symtab_get_offset(id);
@@ -768,11 +687,11 @@ static DataType parse_factor(void) {
             } else {
                 emit_crct(base_offset);
                 emit_soma();            // endereço = base + índice
-                emit_crvi();            // carrega valor desse endereço
+                emit_crvi();            // carrega valor do endereço
             }
             type = TIPO_INT;
         } else {
-            // Variável simples
+            /* Variável simples */
             int offset = symtab_get_offset(id);
             if (offset == -1) {
                 diag_error(current.line, "variável declarada", id);
@@ -788,12 +707,14 @@ static DataType parse_factor(void) {
         type = parse_expr();
         match(sFECHAPAR);
     } else if (current.type == sSUBTRAT) {
+        /* Menos unário */
         advance();
         parse_factor();
         emit_crct(0);
         emit_subt();
         type = TIPO_INT;
     } else if (current.type == sNEG) {
+        /* Negação lógica unária */
         advance();
         parse_factor();
         emit_invr();
@@ -807,6 +728,7 @@ static DataType parse_factor(void) {
     return type;
 }
 
+/* Termo: fator (* ou / fator) */
 static DataType parse_term(void) {
     diag_info("Entrando em parse_term");
     DataType t = parse_factor();
@@ -824,6 +746,7 @@ static DataType parse_term(void) {
     return t;
 }
 
+/* Expressão simples: termo (+ ou - termo) */
 static DataType parse_simple_expr(void) {
     diag_info("Entrando em parse_simple_expr");
     DataType t = parse_term();
@@ -841,6 +764,7 @@ static DataType parse_simple_expr(void) {
     return t;
 }
 
+/* Expressão relacional: simples (op relacional simples) */
 static DataType parse_relational(void) {
     diag_info("Entrando em parse_relational");
     DataType t = parse_simple_expr();
@@ -867,6 +791,7 @@ static DataType parse_relational(void) {
     return t;
 }
 
+/* Expressão lógica AND (conjunção) */
 static DataType parse_logical_and(void) {
     diag_info("Entrando em parse_logical_and");
     DataType t = parse_relational();
@@ -882,6 +807,7 @@ static DataType parse_logical_and(void) {
     return t;
 }
 
+/* Expressão lógica OR (disjunção) – nível mais alto */
 static DataType parse_expr(void) {
     diag_info("Entrando em parse_expr");
     DataType t = parse_logical_and();
@@ -897,8 +823,7 @@ static DataType parse_expr(void) {
     return t;
 }
 
-// ----------------------------------------------------------------------
-// Programa principal
+/* Ponto de entrada principal do parser */
 void parse_program(FILE *source, const char *source_filename, int trace_enabled, int tk_flag, int st_flag) {
     diag_info("Entrando em parse_program");
     trace_flag = trace_enabled;
@@ -920,16 +845,15 @@ void parse_program(FILE *source, const char *source_filename, int trace_enabled,
         parse_globals();
     }
 
-    // Gera desvio para o ponto de entrada principal
+    /* Desvia para o ponto de entrada, pulando as sub-rotinas */
     char *start_label = new_label();
     emit_dsvs(start_label);
 
-    // Processa todas as sub-rotinas (incluindo main)
     if (current.type == sPROC || current.type == sFN) {
         parse_subs();
     }
 
-    // Código principal (chamada ao main)
+    /* Código principal: chama main */
     emit_label(start_label);
     const char *main_label = symtab_get_label("main");
     if (main_label) {
@@ -945,6 +869,7 @@ void parse_program(FILE *source, const char *source_filename, int trace_enabled,
         diag_error(current.line, "fim de arquivo", token_type_name(current.type));
     }
 
+    /* Gera arquivo .ts se solicitado */
     if (st_flag) {
         char fname[512];
         snprintf(fname, sizeof(fname), "%s.ts", source_filename);
